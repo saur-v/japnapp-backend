@@ -215,3 +215,18 @@ async def submit_speaking_attempt(user_id: str, item_id: str, audio: UploadFile,
     submit_review(user_id=user_id, item_id=item_id, result=result, event_type="speaking", db=db)
 
     return scoring
+
+
+
+
+# app/main.py (add)
+@app.get("/items/batch")
+def get_items_batch(item_ids: str, db: Session = Depends(get_db)):
+    """item_ids: comma-separated UUIDs, e.g. ?item_ids=uuid1,uuid2,uuid3"""
+    ids = item_ids.split(",")
+    rows = db.execute(text("""
+        SELECT id, text_ja, reading, romaji, meaning_en, part_of_speech,
+               example_sentence_ja, example_sentence_en, jlpt_level
+        FROM items WHERE id = ANY(:ids)
+    """), {"ids": ids}).mappings().all()
+    return [dict(r) for r in rows]
