@@ -1,0 +1,17 @@
+# requirements.txt (updated)
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg2-binary
+pydantic
+google-generativeai
+pymupdf
+python-multipart
+python-dotenv
+# requirements.txt (add)
+pytesseract
+pillow
+pdf2image
+# requirements.txt (add)
+google-cloud-speech
+python-Levenshtein
