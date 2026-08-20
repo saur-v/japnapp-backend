@@ -1,6 +1,6 @@
 # app/ingestion/structured_extract.py
 import os, json
-from google import genai
+import google.generativeai as genai
 
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 
