@@ -66,8 +66,13 @@ def submit_review(user_id: str, item_id: str, result: str, event_type: str = "fl
         WHERE user_id=:uid AND item_id=:iid
     """), {"uid": user_id, "iid": item_id}).mappings().first()
 
+    # Fallback for new items that haven't been studied yet
+    if not record:
+        record = {"ease_factor": 2.5, "interval_days": 0, "repetitions": 0}
+
     updated = update_memory_record(dict(record), result)
 
+    # Explicitly map the dictionary keys to the bind parameters expected by your SQL query
     db.execute(text("""
         UPDATE memory_records SET ease_factor=:ease, interval_days=:interval, repetitions=:reps,
             next_due_date=:due, last_result=:result, mastery_state=:mastery,
@@ -75,12 +80,22 @@ def submit_review(user_id: str, item_id: str, result: str, event_type: str = "fl
             total_correct = total_correct + (CASE WHEN :result != 'again' THEN 1 ELSE 0 END),
             last_reviewed_at = now()
         WHERE user_id=:uid AND item_id=:iid
-    """), {**updated, "uid": user_id, "iid": item_id})
+    """), {
+        "ease": updated.get("ease_factor", 2.5),
+        "interval": updated.get("interval_days", 1),
+        "reps": updated.get("repetitions", 1),
+        "due": updated.get("next_due_date"),
+        "mastery": updated.get("mastery_state", "learning"),
+        "result": result,
+        "uid": user_id,
+        "iid": item_id
+    })
 
     db.execute(text("""
         INSERT INTO review_events (user_id, item_id, event_type, result)
         VALUES (:uid,:iid,:etype,:result)
     """), {"uid": user_id, "iid": item_id, "etype": event_type, "result": result})
+    
     db.commit()
     return {"ok": True, "updated": updated}
 
