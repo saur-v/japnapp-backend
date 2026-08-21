@@ -33,7 +33,6 @@ CHUNK:
 ---
 """
 
-# app/ingestion/structured_extract.py
 import time
 
 def extract_items_from_chunk(chunk: str, max_retries: int = 3) -> list[dict]:
