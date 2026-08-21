@@ -216,13 +216,12 @@ async def submit_speaking_attempt(user_id: str, item_id: str, audio: UploadFile,
 
     return scoring
 
-
 @app.get("/items/batch")
 def get_items_batch(item_ids: str, db: Session = Depends(get_db)):
     ids = item_ids.split(",")
     rows = db.execute(text("""
         SELECT id, text_ja, reading, romaji, meaning_en, part_of_speech,
                example_sentence_ja, example_sentence_en, jlpt_level
-        FROM items WHERE id = ANY(:ids::uuid[])
+        FROM items WHERE id = ANY((:ids)::uuid[])
     """), {"ids": ids}).mappings().all()
     return [dict(r) for r in rows]
