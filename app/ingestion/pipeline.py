@@ -1,5 +1,6 @@
 # app/ingestion/pipeline.py
 from sqlalchemy import text
+import time
 from app.ingestion.extract import extract_text_from_pdf, chunk_text
 from app.ingestion.structured_extract import extract_items_from_chunk
 
@@ -24,6 +25,7 @@ def run_ingestion(db, document_id: str, user_id: str, pdf_path: str):
 
     for chunk in chunks:
         extracted = extract_items_from_chunk(chunk)
+        time.sleep(3.5)
         for it in extracted:
             if not it.get("text_ja"):
                 continue

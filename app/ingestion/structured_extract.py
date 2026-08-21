@@ -33,11 +33,23 @@ CHUNK:
 ---
 """
 
-def extract_items_from_chunk(chunk: str) -> list[dict]:
-    resp = model.generate_content(EXTRACTION_PROMPT.format(chunk=chunk))
-    raw = resp.text.strip()
-    raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return []  # skip malformed chunk rather than crash the whole ingestion
+# app/ingestion/structured_extract.py
+import time
+
+def extract_items_from_chunk(chunk: str, max_retries: int = 3) -> list[dict]:
+    for attempt in range(max_retries):
+        try:
+            resp = model.generate_content(EXTRACTION_PROMPT.format(chunk=chunk))
+            raw = resp.text.strip()
+            raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                return []
+        except Exception as e:
+            if "RESOURCE_EXHAUSTED" in str(e) and attempt < max_retries - 1:
+                wait = 25  # Gemini error message tells us ~24s until quota resets
+                time.sleep(wait)
+                continue
+            raise
+    return []
