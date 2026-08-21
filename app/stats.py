@@ -21,14 +21,15 @@ def get_streak(db, user_id: str) -> int:
     return streak
 
 def get_accuracy_trend(db, user_id: str, days: int = 30) -> list[dict]:
+    cutoff = date.today() - timedelta(days=days)
     rows = db.execute(text("""
         SELECT created_at::date AS d,
                COUNT(*) AS total,
                COUNT(*) FILTER (WHERE result != 'again') AS correct
         FROM review_events
-        WHERE user_id=:uid AND created_at >= CURRENT_DATE - :days::int
+        WHERE user_id=:uid AND created_at >= :cutoff
         GROUP BY d ORDER BY d
-    """), {"uid": user_id, "days": days}).mappings().all()
+    """), {"uid": user_id, "cutoff": cutoff}).mappings().all()
 
     return [
         {"date": str(r["d"]), "accuracy": round(r["correct"] / r["total"], 3) if r["total"] else 0}
@@ -37,10 +38,11 @@ def get_accuracy_trend(db, user_id: str, days: int = 30) -> list[dict]:
 
 def get_review_heatmap(db, user_id: str, days: int = 365) -> list[dict]:
     """Calendar-heatmap data: review count per day, like GitHub contributions graph."""
+    cutoff = date.today() - timedelta(days=days)
     rows = db.execute(text("""
         SELECT created_at::date AS d, COUNT(*) AS count
         FROM review_events
-        WHERE user_id=:uid AND created_at >= CURRENT_DATE - :days::int
+        WHERE user_id=:uid AND created_at >= :cutoff
         GROUP BY d ORDER BY d
-    """), {"uid": user_id, "days": days}).mappings().all()
+    """), {"uid": user_id, "cutoff": cutoff}).mappings().all()
     return [{"date": str(r["d"]), "count": r["count"]} for r in rows]
