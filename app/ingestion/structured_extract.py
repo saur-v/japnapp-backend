@@ -46,7 +46,7 @@ Guidelines:
 
 def extract_items_from_text(client: genai.Client, text_segment: str) -> DocumentExtractionResult:
     prompt = f"{EXTRACTION_SYSTEM_PROMPT}\n\nDOCUMENT CONTENT:\n---\n{text_segment}\n---\n\nExtract all Japanese learning items from this document in one single hit and return JSON matching DocumentExtractionResult."
-    models_to_try = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash-lite"]
+    models_to_try = ["Gemini 3 Flash", "Gemini 3.5 Flash-Lite", "gemini-flash-lite-latest", "gemini-2.5-flash-lite"]
     last_error = None
 
     for m in models_to_try:
