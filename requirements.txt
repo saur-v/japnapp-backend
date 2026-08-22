@@ -1,18 +1,18 @@
-# requirements.txt (updated)
 fastapi
 uvicorn[standard]
 sqlalchemy
 psycopg2-binary
 pydantic
 google-generativeai
+google-genai
+langchain
+langchain-google-genai
 pymupdf
 python-multipart
 python-dotenv
-# requirements.txt (add)
 pytesseract
 pillow
 pdf2image
-# requirements.txt (add)
 google-cloud-speech
 google-cloud-texttospeech
 python-Levenshtein
