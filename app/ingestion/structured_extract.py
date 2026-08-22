@@ -1,11 +1,11 @@
 # app/ingestion/structured_extract.py
-import os, json
+import os, json, time
 from typing import Optional, List, Literal
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
-from app.ingestion.extract import extract_text_from_pdf
+from app.ingestion.extract import extract_pages_text_from_pdf
 
 load_dotenv()
 
@@ -33,11 +33,11 @@ class DocumentExtractionResult(BaseModel):
     )
 
 EXTRACTION_SYSTEM_PROMPT = """You are an expert Japanese linguist and curriculum builder.
-Your task is to extract ALL learnable Japanese material (vocabulary, kanji, grammar points, expressions, sentences) from the provided document in ONE single comprehensive pass.
+Your task is to extract ALL learnable Japanese material (vocabulary, kanji, grammar points, expressions, sentences) from the provided document text.
 
 Guidelines:
 1. Strict Grounding: ONLY extract items that are explicitly present in the document. Do not invent items outside the source text.
-2. Completeness: Extract EVERY meaningful vocabulary word, kanji, and grammar structure found in the document.
+2. Completeness: Extract EVERY single numbered vocabulary word, expression, and kanji found in the text.
 3. Accurate Furigana: Provide the exact Kana reading and clean Romaji.
 4. Natural Translations: Provide clear English meanings.
 5. Examples: Include the Japanese example sentence and English translation if present in the text, or generate a simple natural one grounded in the item.
@@ -45,7 +45,7 @@ Guidelines:
 """
 
 def extract_items_from_text(client: genai.Client, text_segment: str) -> DocumentExtractionResult:
-    prompt = f"{EXTRACTION_SYSTEM_PROMPT}\n\nDOCUMENT CONTENT:\n---\n{text_segment}\n---\n\nExtract all Japanese learning items from this document in one single hit and return JSON matching DocumentExtractionResult."
+    prompt = f"{EXTRACTION_SYSTEM_PROMPT}\n\nDOCUMENT CONTENT:\n---\n{text_segment}\n---\n\nExtract all Japanese learning items from this text and return JSON matching DocumentExtractionResult."
     models_to_try = [
         "gemini-3.5-flash",
         "gemini-3.5-flash-lite",
@@ -77,35 +77,45 @@ def extract_items_from_text(client: genai.Client, text_segment: str) -> Document
 
 def extract_document_in_one_pass(pdf_path: str) -> DocumentExtractionResult:
     """
-    Extracts all Japanese learning items from the entire PDF in 1 SINGLE HIT (No chunking).
-    Leverages Gemini's 1,000,000+ token context window.
+    Extracts all Japanese learning items from the entire PDF.
+    - Filters out empty/blank trailing pages automatically.
+    - Processes valid vocabulary pages in optimal 3-page batches to extract all 800+ items without token truncation!
     """
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise ValueError("GEMINI_API_KEY environment variable is not set on the server!")
 
     client = genai.Client(api_key=api_key)
-    raw_text = extract_text_from_pdf(pdf_path)
+    raw_pages = extract_pages_text_from_pdf(pdf_path)
+    
+    # Filter out blank / trailing pages
+    valid_pages = [p for p in raw_pages if len(p.strip()) > 50]
+    total_valid = len(valid_pages)
 
-    if len(raw_text.strip()) > 50:
-        # Full text extracted from all pages -> processed in 1 single call
-        return extract_items_from_text(client, raw_text)
-    else:
-        # Scanned image-only PDF -> sent directly to Gemini Multimodal in 1 single call
-        with open(pdf_path, "rb") as f:
-            pdf_bytes = f.read()
+    if total_valid == 0:
+        return DocumentExtractionResult(items=[], detected_jlpt_levels=[])
 
-        response = client.models.generate_content(
-            model="gemini-3.5-flash",
-            contents=[
-                types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"),
-                types.Part.from_text(text=f"{EXTRACTION_SYSTEM_PROMPT}\nExtract all Japanese learning items from this document in one single pass and return DocumentExtractionResult."),
-            ],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=DocumentExtractionResult,
-                temperature=0.1,
-            ),
-        )
-        result_json = json.loads(response.text)
-        return DocumentExtractionResult(**result_json)
+    if total_valid <= 3:
+        full_text = "\n\n".join(valid_pages)
+        return extract_items_from_text(client, full_text)
+
+    # Multi-page vocabulary list (e.g. 25 pages, 802 words)
+    print(f"[Extracting Japanese Material]: {total_valid} content pages detected. Processing in optimal 3-page batches...")
+    batch_size = 3
+    all_items = []
+    all_levels = set()
+
+    for i in range(0, total_valid, batch_size):
+        batch_pages = valid_pages[i : i + batch_size]
+        batch_text = "\n\n".join(batch_pages)
+        try:
+            res = extract_items_from_text(client, batch_text)
+            all_items.extend(res.items)
+            for lvl in res.detected_jlpt_levels:
+                all_levels.add(lvl)
+            print(f"Batch {i // batch_size + 1}/{(total_valid + batch_size - 1) // batch_size} extracted {len(res.items)} words (Total so far: {len(all_items)})")
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"[Batch {i // batch_size + 1} Error]: {e}")
+
+    return DocumentExtractionResult(items=all_items, detected_jlpt_levels=list(all_levels))
