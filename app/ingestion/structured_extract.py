@@ -1,10 +1,13 @@
 # app/ingestion/structured_extract.py
-import os, base64
+import os, json
 from typing import Optional, List, Literal
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage
+from google import genai
+from google.genai import types
 from app.ingestion.extract import extract_text_from_pdf
+
+load_dotenv()
 
 class JapaneseLearningItem(BaseModel):
     item_type: Literal["vocabulary", "kanji", "sentence", "grammar"] = Field(
@@ -29,15 +32,6 @@ class DocumentExtractionResult(BaseModel):
         default_factory=list, description="Unique JLPT levels identified across the document (e.g. N5, N4)"
     )
 
-def get_structured_llm():
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        api_key=api_key,
-        temperature=0.1,
-    )
-    return llm.with_structured_output(DocumentExtractionResult)
-
 EXTRACTION_SYSTEM_PROMPT = """You are an expert Japanese linguist and curriculum builder.
 Your task is to extract ALL learnable Japanese material (vocabulary, kanji, grammar points, expressions, sentences) from the provided document in ONE comprehensive pass.
 
@@ -53,35 +47,34 @@ Guidelines:
 def extract_document_in_one_pass(pdf_path: str) -> DocumentExtractionResult:
     """
     Extracts all Japanese learning items from the entire PDF in 1 single Gemini call
-    using LangChain's structured_output (Pydantic schema).
+    using native structured output (response_schema).
     """
-    structured_llm = get_structured_llm()
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY", "")
+    client = genai.Client(api_key=api_key)
 
-    # Read and encode PDF for direct native multimodal document understanding
-    try:
-        with open(pdf_path, "rb") as f:
-            pdf_bytes = f.read()
-        pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+    raw_text = extract_text_from_pdf(pdf_path)
+    prompt = f"{EXTRACTION_SYSTEM_PROMPT}\n\nDOCUMENT CONTENT:\n---\n{raw_text}\n---\n\nExtract all Japanese learning items and return JSON matching the schema."
 
-        message = HumanMessage(
-            content=[
-                {"type": "text", "text": EXTRACTION_SYSTEM_PROMPT},
-                {
-                    "type": "media",
-                    "mime_type": "application/pdf",
-                    "data": pdf_b64,
-                },
-                {"type": "text", "text": "Extract all Japanese learning items and return the complete DocumentExtractionResult."}
-            ]
-        )
-        result: DocumentExtractionResult = structured_llm.invoke([message])
-        return result
-    except Exception as e:
-        # Fallback to full digital/OCR text extraction if direct PDF media upload has issues
-        print(f"[Fallback to Full Text Extraction]: {e}")
-        raw_text = extract_text_from_pdf(pdf_path)
-        message = HumanMessage(
-            content=f"{EXTRACTION_SYSTEM_PROMPT}\n\nDOCUMENT CONTENT:\n---\n{raw_text}\n---"
-        )
-        result: DocumentExtractionResult = structured_llm.invoke([message])
-        return result
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    last_error = None
+
+    for m in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=m,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=DocumentExtractionResult,
+                    temperature=0.1,
+                ),
+            )
+            result_json = json.loads(response.text)
+            return DocumentExtractionResult(**result_json)
+        except Exception as e:
+            print(f"[Model {m} extraction fallback]: {e}")
+            last_error = e
+
+    if last_error:
+        raise last_error
+    return DocumentExtractionResult(items=[], detected_jlpt_levels=[])
