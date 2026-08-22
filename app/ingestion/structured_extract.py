@@ -1,11 +1,11 @@
 # app/ingestion/structured_extract.py
-import os, json
+import os, json, time
 from typing import Optional, List, Literal
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
-from app.ingestion.extract import extract_text_from_pdf
+from app.ingestion.extract import extract_pages_text_from_pdf, extract_text_from_pdf
 
 load_dotenv()
 
@@ -33,28 +33,19 @@ class DocumentExtractionResult(BaseModel):
     )
 
 EXTRACTION_SYSTEM_PROMPT = """You are an expert Japanese linguist and curriculum builder.
-Your task is to extract ALL learnable Japanese material (vocabulary, kanji, grammar points, expressions, sentences) from the provided document in ONE comprehensive pass.
+Your task is to extract ALL learnable Japanese material (vocabulary, kanji, grammar points, expressions, sentences) from the provided document text.
 
 Guidelines:
 1. Strict Grounding: ONLY extract items that are explicitly present in the document. Do not invent items outside the source text.
-2. Completeness: Extract every meaningful vocabulary word, kanji, and grammar structure found in the document.
+2. Completeness: Extract EVERY meaningful vocabulary word, kanji, and grammar structure found in the document.
 3. Accurate Furigana: Provide the exact Kana reading and clean Romaji.
 4. Natural Translations: Provide clear English meanings.
 5. Examples: Include the Japanese example sentence and English translation if present in the text, or generate a simple natural one grounded in the item.
 6. JLPT Level: Assign the detected JLPT level (N5, N4, N3, N2, N1) based on standard JLPT specifications.
 """
 
-def extract_document_in_one_pass(pdf_path: str) -> DocumentExtractionResult:
-    """
-    Extracts all Japanese learning items from the entire PDF in 1 single Gemini call
-    using native structured output (response_schema).
-    """
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY", "")
-    client = genai.Client(api_key=api_key)
-
-    raw_text = extract_text_from_pdf(pdf_path)
-    prompt = f"{EXTRACTION_SYSTEM_PROMPT}\n\nDOCUMENT CONTENT:\n---\n{raw_text}\n---\n\nExtract all Japanese learning items and return JSON matching the schema."
-
+def extract_items_from_text(client: genai.Client, text_segment: str) -> DocumentExtractionResult:
+    prompt = f"{EXTRACTION_SYSTEM_PROMPT}\n\nDOCUMENT CONTENT:\n---\n{text_segment}\n---\n\nExtract all Japanese learning items and return JSON matching the schema."
     models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
     last_error = None
 
@@ -72,9 +63,48 @@ def extract_document_in_one_pass(pdf_path: str) -> DocumentExtractionResult:
             result_json = json.loads(response.text)
             return DocumentExtractionResult(**result_json)
         except Exception as e:
-            print(f"[Model {m} extraction fallback]: {e}")
+            print(f"[Model {m} extraction error]: {e}")
             last_error = e
 
     if last_error:
         raise last_error
     return DocumentExtractionResult(items=[], detected_jlpt_levels=[])
+
+def extract_document_in_one_pass(pdf_path: str) -> DocumentExtractionResult:
+    """
+    Extracts all Japanese learning items from the entire PDF.
+    - Small PDFs (<= 15 pages): Extracted in 1 single Gemini call.
+    - Large Books (> 15 pages, e.g. 75 pages): Grouped into batches of 15 pages
+      to prevent output token truncation and guarantee all 400+ words are extracted!
+    """
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY", "")
+    client = genai.Client(api_key=api_key)
+
+    pages = extract_pages_text_from_pdf(pdf_path)
+    total_pages = len(pages)
+
+    if total_pages <= 15:
+        full_text = "\n\n".join(pages)
+        return extract_items_from_text(client, full_text)
+
+    # Large PDF (e.g. 75 pages, 400+ words)
+    print(f"[Large PDF Detected]: {total_pages} pages. Processing in batches of 15 pages to extract all words without truncation...")
+    batch_size = 15
+    all_items = []
+    all_levels = set()
+
+    for i in range(0, total_pages, batch_size):
+        batch_pages = pages[i : i + batch_size]
+        batch_text = "\n\n".join(batch_pages)
+        if not batch_text.strip():
+            continue
+        try:
+            res = extract_items_from_text(client, batch_text)
+            all_items.extend(res.items)
+            for lvl in res.detected_jlpt_levels:
+                all_levels.add(lvl)
+            time.sleep(1.0) # brief pause to respect free tier RPM
+        except Exception as e:
+            print(f"[Batch {i // batch_size + 1} Error]: {e}")
+
+    return DocumentExtractionResult(items=all_items, detected_jlpt_levels=list(all_levels))
