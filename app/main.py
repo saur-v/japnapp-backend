@@ -102,6 +102,63 @@ def replace_document_endpoint(doc_id: str, user_id: str, file: UploadFile, db: S
     replace_document(db, doc_id, uid, path)
     return {"ok": True}
 
+@app.post("/items/bulk_import")
+def bulk_import_items(
+    user_id: str,
+    doc_title: str,
+    items: List[dict] = Body(...),
+    db: Session = Depends(get_db)
+):
+    from app.ingestion.pipeline import normalize_ja
+    uid = ensure_user_exists(db, user_id)
+    doc_id = str(uuid.uuid4())
+    db.execute(text("""
+        INSERT INTO documents (id, user_id, title, original_filename, storage_path, status, item_count, detected_jlpt_levels)
+        VALUES (:id, :uid, :title, :title, '/data/uploads/bulk', 'ready', :c, :levels)
+    """), {"id": doc_id, "uid": uid, "title": doc_title, "c": len(items), "levels": ["N5", "N4"]})
+
+    for it in items:
+        if not it.get("text_ja"):
+            continue
+        norm_txt = normalize_ja(it["text_ja"])
+        existing = db.execute(text("""
+            SELECT id FROM items
+            WHERE user_id = :uid AND item_type = :t AND lower(text_ja) = :norm_txt
+        """), {"uid": uid, "t": it.get("item_type", "vocabulary"), "norm_txt": norm_txt}).fetchone()
+
+        if existing:
+            item_id = existing[0]
+        else:
+            row = db.execute(text("""
+                INSERT INTO items (
+                    user_id, item_type, text_ja, reading, romaji,
+                    meaning_en, part_of_speech, example_sentence_ja, example_sentence_en, jlpt_level
+                )
+                VALUES (:uid, :t, :ja, :reading, :romaji, :meaning, :pos, :exja, :exen, :level)
+                RETURNING id
+            """), {
+                "uid": uid,
+                "t": it.get("item_type", "vocabulary"),
+                "ja": it["text_ja"],
+                "reading": it.get("reading"),
+                "romaji": it.get("romaji"),
+                "meaning": it.get("meaning_en"),
+                "pos": it.get("part_of_speech"),
+                "exja": it.get("example_sentence_ja"),
+                "exen": it.get("example_sentence_en"),
+                "level": it.get("jlpt_level", "N5"),
+            })
+            item_id = row.fetchone()[0]
+
+        db.execute(text("""
+            INSERT INTO item_sources (item_id, document_id) VALUES (:iid, :did)
+            ON CONFLICT DO NOTHING
+        """), {"iid": item_id, "did": doc_id})
+
+    db.commit()
+    generate_daily_plan(db, uid, force=True)
+    return {"ok": True, "document_id": doc_id, "total_imported": len(items)}
+
 # ----------------- Daily Plan Endpoints -----------------
 
 @app.get("/plans/today")
