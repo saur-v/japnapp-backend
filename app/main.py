@@ -136,8 +136,8 @@ def get_items_batch(item_ids: str, db: Session = Depends(get_db)):
                COALESCE(m.total_correct, 0) AS total_correct
         FROM items i
         LEFT JOIN memory_records m ON m.item_id = i.id
-        WHERE i.id = ANY((:ids)::uuid[])
-    """), {"ids": ids}).mappings().all()
+        WHERE i.id IN :ids
+    """), {"ids": tuple(ids)}).mappings().all()
     return [dict(r) for r in rows]
 
 @app.get("/items")
@@ -422,16 +422,16 @@ def update_settings(
         updates.append("daily_new_word_target = :target")
         params["target"] = daily_new_word_target
     if notification_time is not None:
-        updates.append("notification_time = :ntime::time")
+        updates.append("notification_time = CAST(:ntime AS time)")
         params["ntime"] = notification_time
     if reminder_times is not None:
-        updates.append("reminder_times = :rtimes::time[]")
+        updates.append("reminder_times = CAST(:rtimes AS time[])")
         params["rtimes"] = reminder_times
     if quiet_hours_start is not None:
-        updates.append("quiet_hours_start = :qstart::time")
+        updates.append("quiet_hours_start = CAST(:qstart AS time)")
         params["qstart"] = quiet_hours_start
     if quiet_hours_end is not None:
-        updates.append("quiet_hours_end = :qend::time")
+        updates.append("quiet_hours_end = CAST(:qend AS time)")
         params["qend"] = quiet_hours_end
 
     if updates:
@@ -446,8 +446,10 @@ def update_notification_settings(user_id: str, reminder_times: list[str],
                                    quiet_start: str, quiet_end: str, db: Session = Depends(get_db)):
     uid = ensure_user_exists(db, user_id)
     db.execute(text("""
-        UPDATE users SET reminder_times=:times, quiet_hours_start=:qs::time, quiet_hours_end=:qe::time
-        WHERE id=:uid
+        UPDATE users SET reminder_times = CAST(:times AS time[]), 
+                         quiet_hours_start = CAST(:qs AS time), 
+                         quiet_hours_end = CAST(:qe AS time)
+        WHERE id = :uid
     """), {"times": reminder_times, "qs": quiet_start, "qe": quiet_end, "uid": uid})
     db.commit()
     return {"ok": True}
